@@ -28,18 +28,30 @@ REST API backend for the **InkScroller** manga reader. Aggregates MangaDex and J
 
 ---
 
-## Tech Stack
+## Why This Architecture?
 
-| Layer | Technology |
-|-------|-----------|
-| Framework | FastAPI 0.128 |
-| HTTP client | httpx (async) |
-| Data validation | Pydantic v2 |
-| ASGI server | Uvicorn |
-| Auth | Firebase Admin SDK |
-| Persistence | SQLite via aiosqlite |
-| Runtime | Python 3.12 |
-| Deploy | Google Cloud Run (3 environments) |
+### The Problem
+A manga reader backend has unique challenges:
+- **Multi-source aggregation** — MangaDex provides catalog, chapters, images; Jikan provides metadata (score, rank). Need to merge without N+1.
+- **Caching upstream failures** — External APIs fail. Need stale cache fallback.
+- **Firebase ID token verification** — Every authenticated request needs token validation without blocking.
+- **Cold start on Cloud Run** — Serverless means 10s+ first request latency.
+
+### The Solution
+
+| Decision | Rationale |
+|----------|-----------|
+| **FastAPI** | Async-first, Pydantic for validation, OpenAPI docs out of the box. |
+| **httpx async** | Concurrent requests to MangaDex + Jikan without thread blocking. |
+| **SQLite** | Single-user app, no scaling requirements. Simpler than PostgreSQL for a portfolio project. |
+| **Firebase Admin SDK** | Offloads auth to Google, no user DB for passwords. |
+| **In-memory cache** | 5-minute TTL on external API calls. FastAPI's `lru_cache` won't work with async, so custom TTL cache. |
+| **Cloud Run** | Zero-config deployment, auto-scaling. Handles cold starts better than App Engine. |
+
+**Tradeoffs:**
+- SQLite won't scale beyond single-instance. For production with real users, would migrate to Cloud SQL.
+- In-memory cache doesn't share across instances. For multi-instance, would use Redis.
+- These tradeoffs are acceptable for a portfolio project with no scaling requirements. |
 
 ---
 
@@ -99,6 +111,78 @@ python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | `http://localhost:8000/redoc` | ReDoc |
 
 > **Windows note:** Use `python -m pip` and `python -m uvicorn` — never bare `pip`/`uvicorn` — to avoid launcher path issues.
+
+---
+
+## Technical Challenges Solved
+
+### 1. N+1 Problem on Multi-Source Aggregation
+
+**Problem:** Fetching manga detail means calling MangaDex, then Jikan. Sequential = slow.
+
+**Solution:** `asyncio.gather()` concurrent requests:
+
+```python
+async def get_manga_detail(manga_id: str):
+    mangadex_task = mangadex_client.get_manga(manga_id)
+    jikan_task = jikan_client.get_mal_metadata(manga_id)
+    
+    mangadex, jikan = await asyncio.gather(mangadex_task, jikan_task)
+    return enrich(mangadex, jikan)
+```
+
+---
+
+### 2. Firebase Token Verification on Every Request
+
+**Problem:** Firebase Admin SDK verification is synchronous and adds 50-100ms per request.
+
+**Solution:** Async wrapper with caching:
+
+```python
+@app.middleware("http")
+async def verify_firebase(request: Request, call_next):
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        user = await firebase_auth.verify_id_token_async(token)
+        request.state.user = user
+    return await call_next(request)
+```
+
+---
+
+### 3. Stale Cache Fallback
+
+**Problem:** External APIs fail. Returning 500 erodes trust.
+
+**Solution:** Cache-first with TTL:
+
+```python
+async def fetch_with_cache(key: str, fetch_fn, ttl: int = 300):
+    if cached := cache.get(key):
+        return cached
+    
+    try:
+        result = await fetch_fn()
+        cache.set(key, result, ttl)
+    except Exception:
+        result = cache.get_stale(key)  # Return stale if exists
+        if result is None:
+            raise
+    return result
+```
+
+---
+
+### 4. Cold Start Latency
+
+**Problem:** Cloud Run scales to zero. First request waits for server startup.
+
+**Solution:** 
+- Health check endpoint (`/ping`) without Firebase dependency
+- Client handles 60s timeout gracefully
+- No DB migration on startup (SQLite schema embedded in code)
 
 ---
 
