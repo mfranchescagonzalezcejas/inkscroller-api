@@ -1,0 +1,150 @@
+name: Deploy
+
+# Deploys to all three Cloud Run environments on push to main.
+#
+# Required secrets:
+#   GCP_SA_JSON_DEV      — GCP service account JSON for dev project
+#   GCP_SA_JSON_STAGING  — GCP service account JSON for staging project
+#   GCP_SA_JSON_PRO      — GCP service account JSON for pro project
+#   GCP_PROJECT_DEV      — GCP project ID for dev
+#   GCP_PROJECT_STG      — GCP project ID for staging
+#   GCP_PROJECT_PRO      — GCP project ID for pro
+#   DB_PASS_DEV          — Cloud SQL DB password for dev
+#   DB_PASS_STG          — Cloud SQL DB password for staging
+#   DB_PASS_PRO          — Cloud SQL DB password for pro
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Build & Deploy to Cloud Run
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+          pip install -r requirements.txt
+
+      # ── Quality gates ────────────────────────────────────────────────────────
+
+      - name: Lint
+        run: |
+          ruff check app/ main.py
+          ruff format --check app/ main.py
+
+      - name: Test
+        run: python -m unittest discover -s tests -v
+
+      # ── Build Docker image ───────────────────────────────────────────────────
+
+      - name: Build image
+        run: |
+          docker build -t inkscroller-backend:${{ github.sha }} .
+
+      # ── Deploy DEV ───────────────────────────────────────────────────────────
+
+      - name: Authenticate to GCP (DEV)
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_JSON_DEV }}
+
+      - name: Set up gcloud (DEV)
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Push image to GCR (DEV)
+        run: |
+          gcloud auth configure-docker --quiet
+          docker tag inkscroller-backend:${{ github.sha }} \
+            gcr.io/${{ secrets.GCP_PROJECT_DEV }}/inkscroller-backend:${{ github.sha }}
+          docker tag inkscroller-backend:${{ github.sha }} \
+            gcr.io/${{ secrets.GCP_PROJECT_DEV }}/inkscroller-backend:latest
+          docker push gcr.io/${{ secrets.GCP_PROJECT_DEV }}/inkscroller-backend:${{ github.sha }}
+          docker push gcr.io/${{ secrets.GCP_PROJECT_DEV }}/inkscroller-backend:latest
+
+      - name: Deploy to Cloud Run (DEV)
+        run: |
+          gcloud run deploy inkscroller-backend \
+            --image gcr.io/${{ secrets.GCP_PROJECT_DEV }}/inkscroller-backend:${{ github.sha }} \
+            --platform managed \
+            --region us-central1 \
+            --project ${{ secrets.GCP_PROJECT_DEV }} \
+            --allow-unauthenticated \
+            --add-cloudsql-instances ${{ secrets.GCP_PROJECT_DEV }}:us-central1:inkscroller-db \
+            --set-env-vars "FIREBASE_PROJECT_ID=${{ secrets.GCP_PROJECT_DEV }},CLOUD_SQL_INSTANCE=${{ secrets.GCP_PROJECT_DEV }}:us-central1:inkscroller-db,DB_USER=inkscroller,DB_NAME=inkscroller,DB_PASS=${{ secrets.DB_PASS_DEV }}" \
+            --quiet
+
+      # ── Deploy STAGING ───────────────────────────────────────────────────────
+
+      - name: Authenticate to GCP (STAGING)
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_JSON_STAGING }}
+
+      - name: Set up gcloud (STAGING)
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Push image to GCR (STAGING)
+        run: |
+          gcloud auth configure-docker --quiet
+          docker tag inkscroller-backend:${{ github.sha }} \
+            gcr.io/${{ secrets.GCP_PROJECT_STG }}/inkscroller-backend:${{ github.sha }}
+          docker tag inkscroller-backend:${{ github.sha }} \
+            gcr.io/${{ secrets.GCP_PROJECT_STG }}/inkscroller-backend:latest
+          docker push gcr.io/${{ secrets.GCP_PROJECT_STG }}/inkscroller-backend:${{ github.sha }}
+          docker push gcr.io/${{ secrets.GCP_PROJECT_STG }}/inkscroller-backend:latest
+
+      - name: Deploy to Cloud Run (STAGING)
+        run: |
+          gcloud run deploy inkscroller-backend \
+            --image gcr.io/${{ secrets.GCP_PROJECT_STG }}/inkscroller-backend:${{ github.sha }} \
+            --platform managed \
+            --region us-central1 \
+            --project ${{ secrets.GCP_PROJECT_STG }} \
+            --allow-unauthenticated \
+            --add-cloudsql-instances ${{ secrets.GCP_PROJECT_STG }}:us-central1:inkscroller-db \
+            --set-env-vars "FIREBASE_PROJECT_ID=${{ secrets.GCP_PROJECT_STG }},CLOUD_SQL_INSTANCE=${{ secrets.GCP_PROJECT_STG }}:us-central1:inkscroller-db,DB_USER=inkscroller,DB_NAME=inkscroller,DB_PASS=${{ secrets.DB_PASS_STG }}" \
+            --quiet
+
+      # ── Deploy PRO ───────────────────────────────────────────────────────────
+
+      - name: Authenticate to GCP (PRO)
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_JSON_PRO }}
+
+      - name: Set up gcloud (PRO)
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Push image to GCR (PRO)
+        run: |
+          gcloud auth configure-docker --quiet
+          docker tag inkscroller-backend:${{ github.sha }} \
+            gcr.io/${{ secrets.GCP_PROJECT_PRO }}/inkscroller-backend:${{ github.sha }}
+          docker tag inkscroller-backend:${{ github.sha }} \
+            gcr.io/${{ secrets.GCP_PROJECT_PRO }}/inkscroller-backend:latest
+          docker push gcr.io/${{ secrets.GCP_PROJECT_PRO }}/inkscroller-backend:${{ github.sha }}
+          docker push gcr.io/${{ secrets.GCP_PROJECT_PRO }}/inkscroller-backend:latest
+
+      - name: Deploy to Cloud Run (PRO)
+        run: |
+          gcloud run deploy inkscroller-backend \
+            --image gcr.io/${{ secrets.GCP_PROJECT_PRO }}/inkscroller-backend:${{ github.sha }} \
+            --platform managed \
+            --region us-central1 \
+            --project ${{ secrets.GCP_PROJECT_PRO }} \
+            --allow-unauthenticated \
+            --add-cloudsql-instances ${{ secrets.GCP_PROJECT_PRO }}:us-central1:inkscroller-db \
+            --set-env-vars "FIREBASE_PROJECT_ID=${{ secrets.GCP_PROJECT_PRO }},CLOUD_SQL_INSTANCE=${{ secrets.GCP_PROJECT_PRO }}:us-central1:inkscroller-db,DB_USER=inkscroller,DB_NAME=inkscroller,DB_PASS=${{ secrets.DB_PASS_PRO }}" \
+            --quiet

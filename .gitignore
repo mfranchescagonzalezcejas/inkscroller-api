@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Firebase service account keys (injected via CI — see SECURITY_PUBLIC_READINESS.md)
+serviceAccountKey.json
+*serviceAccount*.json
+firebase-adminsdk-*.json
+*-firebase-adminsdk-*.json
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Local SQLite runtime artifacts
+*.db
+*.db-shm
+*.db-wal
+
+# -------------------------------------------------------
+# PUBLIC-READY SECURITY BASELINE
+# See SECURITY_PUBLIC_READINESS.md for full details
+# -------------------------------------------------------
+
+# Google Cloud / GCP credentials
+*credentials*.json
+gcloud-*.json
+
+# Docker secrets
+docker-compose.override.yml
